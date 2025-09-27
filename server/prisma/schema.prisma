@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  name          String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  role          UserRole       @default(USER)
+  conversations Conversation[]
+  integrations  Integration[]
+  settings      Setting?
+  subscription  Subscription?
+}
+
+model Conversation {
+  id           String     @id @default(cuid())
+  subject      String?
+  channel      Channel    @default(WEBSITE)
+  status       ConvStatus @default(OPEN)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  customerName String?
+  userId       String?
+  user         User?      @relation(fields: [userId], references: [id])
+  messages     Message[]
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  sender         Sender
+  content        String
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+}
+
+model Setting {
+  id                Int   @id @default(cuid())
+  userId            String   @unique
+  aiEnabled         Boolean  @default(true)
+  notifications     Boolean  @default(true)
+  dataRetentionDays Int      @default(90)
+  createdAt         DateTime @default(now())  
+  updatedAt         DateTime @updatedAt
+  businessName      String?
+  contactEmail      String?
+  phoneNumber       String?
+  websiteUrl        String?
+  user              User     @relation(fields: [userId], references: [id])
+}
+
+model Integration {
+  id         String   @id @default(cuid())
+  userId     String
+  provider   String
+  status     String   @default("connected")
+  lastSyncAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id])
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  plan        String
+  status      String   @default("active")
+  queriesUsed Int      @default(0)
+  nextBilling DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum Channel {
+  WHATSAPP
+  INSTAGRAM
+  WEBSITE
+}
+
+enum ConvStatus {
+  OPEN
+  HUMAN
+  RESOLVED
+}
+
+enum Sender {
+  CUSTOMER
+  AI
+  HUMAN
+}
