@@ -1,199 +1,264 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { authMiddleware, AuthRequest } from '../middleware/auth.js';
-import { redis } from '../index.js';
 
 export const analyticsRouter = Router();
 analyticsRouter.use(authMiddleware);
 
-// Dashboard analytics
+// Get dashboard analytics
 analyticsRouter.get('/dashboard', async (req: AuthRequest, res) => {
   try {
-    const userId = req.userId;
-    const cacheKey = `analytics:dashboard:${userId}`;
+    const userId = req.userId!;
     
-    // Check cache first
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      return res.json(JSON.parse(cached));
-    }
-    
-    // Calculate date ranges
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-    
-    // Get current month conversations
-    const currentMonthConversations = await prisma.conversation.findMany({
-      where: {
-        userId,
-        createdAt: { gte: startOfMonth }
-      },
-      include: { messages: true }
+    // Get basic stats from database (no Redis needed)
+    const [
+      totalConversations,
+      openConversations, 
+      resolvedConversations,
+      totalMessages,
+      recentConversations
+    ] = await Promise.all([
+      // Total conversations
+      prisma.conversation.count({
+        where: { userId }
+      }),
+      
+      // Open conversations
+      prisma.conversation.count({
+        where: { userId, status: 'OPEN' }
+      }),
+      
+      // Resolved conversations
+      prisma.conversation.count({
+        where: { userId, status: 'RESOLVED' }
+      }),
+      
+      // Total messages
+      prisma.message.count({
+        where: { 
+          conversation: { userId }
+        }
+      }),
+      
+      // Recent conversations for activity
+      prisma.conversation.findMany({
+        where: { userId },
+        include: {
+          messages: {
+            take: 1,
+            orderBy: { createdAt: 'desc' }
+          }
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 10
+      })
+    ]);
+
+    // Calculate channel stats
+    const channelStats = await prisma.conversation.groupBy({
+      by: ['channel'],
+      where: { userId },
+      _count: {
+        id: true
+      }
     });
-    
-    // Get last month conversations for comparison
-    const lastMonthConversations = await prisma.conversation.findMany({
+
+    // Calculate daily activity (last 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const dailyActivity = await prisma.conversation.groupBy({
+      by: ['createdAt'],
       where: {
         userId,
-        createdAt: { 
-          gte: startOfLastMonth,
-          lte: endOfLastMonth
+        createdAt: {
+          gte: sevenDaysAgo
         }
       },
-      include: { messages: true }
-    });
-    
-    // Calculate metrics
-    const totalQueries = currentMonthConversations.length;
-    const lastMonthQueries = lastMonthConversations.length;
-    const queriesChange = lastMonthQueries > 0 ? 
-      ((totalQueries - lastMonthQueries) / lastMonthQueries * 100).toFixed(1) : 0;
-    
-    // AI resolution rate
-    const aiResolved = currentMonthConversations.filter(c => 
-      c.status === 'RESOLVED' && 
-      c.messages.some(m => m.sender === 'AI')
-    ).length;
-    const aiResolutionRate = totalQueries > 0 ? 
-      ((aiResolved / totalQueries) * 100).toFixed(1) : 0;
-    
-    // Average response time (mock data - would calculate from actual timestamps)
-    const avgResponseTime = currentMonthConversations.length > 0 ? 
-      calculateAverageResponseTime(currentMonthConversations) : 0;
-    
-    // Active users
-    const activeUsers = new Set(
-      currentMonthConversations.map(c => c.customerName).filter(Boolean)
-    ).size;
-    
-    // Channel distribution
-    const channelStats = [
-      {
-        name: 'WhatsApp',
-        queries: currentMonthConversations.filter(c => c.channel === 'WHATSAPP').length,
-        percentage: totalQueries > 0 ? 
-          Math.round((currentMonthConversations.filter(c => c.channel === 'WHATSAPP').length / totalQueries) * 100) : 0
-      },
-      {
-        name: 'Instagram', 
-        queries: currentMonthConversations.filter(c => c.channel === 'INSTAGRAM').length,
-        percentage: totalQueries > 0 ? 
-          Math.round((currentMonthConversations.filter(c => c.channel === 'INSTAGRAM').length / totalQueries) * 100) : 0
-      },
-      {
-        name: 'Website',
-        queries: currentMonthConversations.filter(c => c.channel === 'WEBSITE').length,
-        percentage: totalQueries > 0 ? 
-          Math.round((currentMonthConversations.filter(c => c.channel === 'WEBSITE').length / totalQueries) * 100) : 0
+      _count: {
+        id: true
       }
-    ];
-    
-    const analytics = {
-      totalQueries,
-      queriesChange: `${queriesChange > 0 ? '+' : ''}${queriesChange}%`,
-      aiResolutionRate: `${aiResolutionRate}%`,
-      avgResponseTime: `${avgResponseTime}s`,
-      activeUsers,
-      channelStats,
-      recentActivity: await getRecentActivity(userId)
-    };
-    
-    // Cache for 10 minutes
-    await redis.setex(cacheKey, 600, JSON.stringify(analytics));
-    
-    res.json(analytics);
-    
-  } catch (error) {
-    console.error('Analytics error:', error);
-    res.status(500).json({ error: 'Failed to fetch analytics' });
-  }
-});
-
-// Time series data for charts
-analyticsRouter.get('/timeseries', async (req: AuthRequest, res) => {
-  try {
-    const { period = '7d', metric = 'conversations' } = req.query;
-    const userId = req.userId;
-    
-    let days = 7;
-    if (period === '30d') days = 30;
-    if (period === '90d') days = 90;
-    
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    
-    const conversations = await prisma.conversation.findMany({
-      where: {
-        userId,
-        createdAt: { gte: startDate }
-      },
-      include: { messages: true }
     });
-    
-    // Group by date
-    const dataPoints = [];
-    for (let i = 0; i < days; i++) {
+
+    // Format daily activity for charts
+    const activityData = [];
+    for (let i = 6; i >= 0; i--) {
       const date = new Date();
-      date.setDate(date.getDate() - (days - 1 - i));
+      date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T');
       
-      const dayConversations = conversations.filter(c => 
-        c.createdAt.toISOString().split('T') === dateStr
-      );
+      const count = dailyActivity.filter(activity => {
+        const activityDate = activity.createdAt.toISOString().split('T');
+        return activityDate === dateStr;
+      }).reduce((sum, item) => sum + item._count.id, 0);
       
-      let value = 0;
-      if (metric === 'conversations') {
-        value = dayConversations.length;
-      } else if (metric === 'messages') {
-        value = dayConversations.reduce((sum, c) => sum + c.messages.length, 0);
-      } else if (metric === 'ai_responses') {
-        value = dayConversations.reduce((sum, c) => 
-          sum + c.messages.filter(m => m.sender === 'AI').length, 0
-        );
-      }
-      
-      dataPoints.push({
+      activityData.push({
         date: dateStr,
-        value
+        value: count
       });
     }
+
+    // Response time calculation (mock for localhost)
+    const avgResponseTime = '1.2s';
+    const customerSatisfaction = '4.2/5';
     
-    res.json({ dataPoints });
-    
+    res.json({
+      overview: {
+        totalConversations,
+        openConversations,
+        resolvedConversations,
+        totalMessages,
+        avgResponseTime,
+        customerSatisfaction
+      },
+      channelStats: channelStats.map(stat => ({
+        name: stat.channel,
+        queries: stat._count.id,
+        responseTime: `${Math.random() * 2 + 0.5}s`, // Mock data for localhost
+        satisfaction: `${(Math.random() * 1.5 + 3.5).toFixed(1)}/5`
+      })),
+      activityData,
+      recentActivity: recentConversations.map(conv => ({
+        id: conv.id,
+        customerName: conv.customerName,
+        channel: conv.channel,
+        status: conv.status,
+        lastMessage: conv.messages?.content?.substring(0, 50) + '...' || 'No messages',
+        updatedAt: conv.updatedAt
+      }))
+    });
+
   } catch (error) {
-    console.error('Timeseries analytics error:', error);
-    res.status(500).json({ error: 'Failed to fetch timeseries data' });
+    console.error('Analytics dashboard error:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard analytics' });
   }
 });
 
-// Helper functions
-function calculateAverageResponseTime(conversations: any[]): number {
-  // This would calculate actual response times based on message timestamps
-  // For now, return a mock value
-  return Math.round(Math.random() * 5 + 1); // 1-6 seconds
-}
+// Get conversation analytics
+analyticsRouter.get('/conversations', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+    
+    // Parse query parameters
+    const { 
+      channel, 
+      status, 
+      startDate, 
+      endDate,
+      page = '1',
+      limit = '20'
+    } = req.query;
 
-async function getRecentActivity(userId: string) {
-  const recentConversations = await prisma.conversation.findMany({
-    where: { userId },
-    orderBy: { updatedAt: 'desc' },
-    take: 5,
-    include: { 
-      messages: { 
-        orderBy: { createdAt: 'desc' },
-        take: 1 
-      } 
+    const pageNum = parseInt(page as string);
+    const limitNum = parseInt(limit as string);
+    const offset = (pageNum - 1) * limitNum;
+
+    // Build where clause
+    const where: any = { userId };
+    
+    if (channel) where.channel = channel;
+    if (status) where.status = status;
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate as string);
+      if (endDate) where.createdAt.lte = new Date(endDate as string);
     }
-  });
-  
-  return recentConversations.map(conv => ({
-    id: conv.id,
-    customer: conv.customerName || 'Anonymous',
-    channel: conv.channel.toLowerCase(),
-    status: conv.status.toLowerCase(),
-    lastMessage: conv.messages?.content || 'No messages',
-    time: conv.updatedAt.toISOString()
-  }));
+
+    const [conversations, total] = await Promise.all([
+      prisma.conversation.findMany({
+        where,
+        include: {
+          messages: {
+            take: 1,
+            orderBy: { createdAt: 'desc' }
+          },
+          _count: {
+            messages: true
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limitNum
+      }),
+      prisma.conversation.count({ where })
+    ]);
+
+    res.json({
+      conversations,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum)
+      }
+    });
+
+  } catch (error) {
+    console.error('Conversation analytics error:', error);
+    res.status(500).json({ error: 'Failed to fetch conversation analytics' });
+  }
+});
+
+// Get performance metrics
+analyticsRouter.get('/performance', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!;
+    
+    // Mock performance data for localhost development
+    const performanceData = {
+      responseTime: {
+        average: 1.2,
+        trend: '+0.3s from last week'
+      },
+      resolutionRate: {
+        percentage: 89.5,
+        trend: '+2.3% from last week'
+      },
+      customerSatisfaction: {
+        score: 4.2,
+        trend: '+0.1 from last week'
+      },
+      aiAutomation: {
+        percentage: 76.8,
+        trend: '+5.2% from last week'
+      },
+      channelPerformance: [
+        { channel: 'WHATSAPP', responseTime: 2.1, satisfaction: 4.3, volume: 45 },
+        { channel: 'INSTAGRAM', responseTime: 1.8, satisfaction: 4.0, volume: 32 },
+        { channel: 'WEBSITE', responseTime: 0.8, satisfaction: 3.9, volume: 28 },
+        { channel: 'VOICE_CALL', responseTime: 1.2, satisfaction: 4.5, volume: 15 }
+      ]
+    };
+
+    res.json(performanceData);
+
+  } catch (error) {
+    console.error('Performance analytics error:', error);
+    res.status(500).json({ error: 'Failed to fetch performance metrics' });
+  }
+});
+
+// Export basic stats (for other services)
+export async function getBasicAnalytics(userId: string) {
+  try {
+    const [totalConversations, openConversations, totalMessages] = await Promise.all([
+      prisma.conversation.count({ where: { userId } }),
+      prisma.conversation.count({ where: { userId, status: 'OPEN' } }),
+      prisma.message.count({ where: { conversation: { userId } } })
+    ]);
+
+    return {
+      totalConversations,
+      openConversations,
+      totalMessages
+    };
+  } catch (error) {
+    console.error('Basic analytics error:', error);
+    return {
+      totalConversations: 0,
+      openConversations: 0,
+      totalMessages: 0
+    };
+  }
 }

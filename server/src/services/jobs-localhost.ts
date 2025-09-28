@@ -1,71 +1,50 @@
-// Simple job processing without Redis (for development)
+// Localhost job processing (no Redis/Bull)
 import { socketManager } from './socket.js';
 import { aiService } from './ai.js';
 import { webhookService } from './webhook.js';
 
-interface Job {
-  id: string;
-  type: string;
-  data: any;
-  createdAt: Date;
-}
+console.log('📋 Localhost job processing initialized (no Redis)');
 
-class SimpleJobQueue {
-  private jobs: Job[] = [];
-  private processing = false;
-  
-  constructor(private name: string) {}
+// Simple in-memory job processing
+class LocalhostJobQueue {
+  private processingJobs = new Set<string>();
 
-  async add(type: string, data: any): Promise<string> {
-    const job: Job = {
-      id: `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type,
-      data,
-      createdAt: new Date()
-    };
+  async add(jobType: string, data: any): Promise<string> {
+    const jobId = `localhost-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
-    this.jobs.push(job);
-    console.log(`📋 Job added to ${this.name}: ${type}`);
+    console.log(`📋 Processing ${jobType} job locally`);
     
-    // Process immediately (in real apps, this would be queued)
-    this.processJobs();
+    // Process immediately (no queuing in localhost)
+    setImmediate(() => this.processJob(jobType, data, jobId));
     
-    return job.id;
+    return jobId;
   }
 
-  private async processJobs() {
-    if (this.processing || this.jobs.length === 0) return;
+  private async processJob(jobType: string, data: any, jobId: string) {
+    if (this.processingJobs.has(jobId)) return;
     
-    this.processing = true;
+    this.processingJobs.add(jobId);
     
-    while (this.jobs.length > 0) {
-      const job = this.jobs.shift()!;
-      
-      try {
-        await this.processJob(job);
-        console.log(`✅ Job ${job.id} completed in ${this.name}`);
-      } catch (error) {
-        console.error(`❌ Job ${job.id} failed in ${this.name}:`, error);
+    try {
+      if (jobType === 'process_incoming_message') {
+        await this.processIncomingMessage(data);
+      } else if (jobType === 'generate_response') {
+        await this.processAIResponse(data);
+      } else if (jobType === 'send_notification') {
+        await this.processNotification(data);
       }
-    }
-    
-    this.processing = false;
-  }
-
-  private async processJob(job: Job) {
-    // Process different job types
-    if (this.name === 'webhook processing' && job.type === 'process_incoming_message') {
-      await this.processIncomingMessage(job.data);
-    } else if (this.name === 'ai processing' && job.type === 'generate_response') {
-      await this.processAIResponse(job.data);
-    } else if (this.name === 'notifications' && job.type === 'send_notification') {
-      await this.processNotification(job.data);
+      
+      console.log(`✅ Job ${jobId} completed`);
+    } catch (error) {
+      console.error(`❌ Job ${jobId} failed:`, error);
+    } finally {
+      this.processingJobs.delete(jobId);
     }
   }
 
   private async processIncomingMessage(data: any) {
     const { platform, messageData } = data;
-    console.log(`Processing ${platform} message:`, messageData);
+    console.log(`📨 Processing ${platform} message`);
 
     let conversationId: string | null = null;
 
@@ -86,7 +65,7 @@ class SimpleJobQueue {
 
   private async processAIResponse(data: any) {
     const { conversationId, message, platform } = data;
-    console.log(`Generating AI response for conversation ${conversationId}`);
+    console.log(`🤖 Generating AI response for conversation ${conversationId}`);
 
     const aiResponse = await aiService.generateResponse(conversationId, message);
     
@@ -114,7 +93,7 @@ class SimpleJobQueue {
 
   private async processNotification(data: any) {
     const { userId, title, message, type } = data;
-    console.log(`Sending notification to user ${userId}: ${title}`);
+    console.log(`🔔 Sending notification to user ${userId}: ${title}`);
 
     if (socketManager) {
       socketManager.emitToUser(userId, 'notification', {
@@ -127,9 +106,10 @@ class SimpleJobQueue {
   }
 }
 
-// Create simple job queues
-export const webhookQueue = new SimpleJobQueue('webhook processing');
-export const aiQueue = new SimpleJobQueue('ai processing');
-export const notificationQueue = new SimpleJobQueue('notifications');
+// Export localhost job queues
+export const webhookQueue = new LocalhostJobQueue();
+export const aiQueue = new LocalhostJobQueue();
+export const messageQueue = new LocalhostJobQueue();
+export const notificationQueue = new LocalhostJobQueue();
 
-console.log('📋 Simple job queues initialized successfully (Redis-free)');
+console.log('✅ Localhost job queues ready');

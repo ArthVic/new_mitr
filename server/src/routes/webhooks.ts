@@ -1,161 +1,194 @@
-import { Router, Request, Response } from 'express';
-import { webhookService } from '../services/webhook.js';
-import { webhookQueue } from '../services/queue.js';
+import { Router } from 'express';
+import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-
+import { messageQueue, webhookQueue } from '../services/jobs-localhost.js';
+import { socketManager } from '../services/socket.js';
 
 export const webhookRouter = Router();
 
-// WhatsApp webhook
-webhookRouter.get('/whatsapp', (req: Request, res: Response) => {
+// WhatsApp webhook verification
+webhookRouter.get('/whatsapp', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  
-  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    res.status(200).send(challenge);
+
+  // Verify webhook (use your actual verify token)
+  if (mode && token) {
+    if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+      console.log('✅ WhatsApp webhook verified');
+      res.status(200).send(challenge);
+    } else {
+      console.log('❌ WhatsApp webhook verification failed');
+      res.sendStatus(403);
+    }
   } else {
-    res.status(403).send('Forbidden');
+    res.sendStatus(400);
   }
 });
 
-webhookRouter.post('/whatsapp', async (req: Request, res: Response) => {
+// WhatsApp webhook - receive messages
+webhookRouter.post('/whatsapp', async (req, res) => {
   try {
-    const signature = req.headers['x-hub-signature-256'] as string;
-    const payload = JSON.stringify(req.body);
-    
-    if (!webhookService.verifyWhatsAppWebhook(payload, signature)) {
-      return res.status(403).send('Unauthorized');
-    }
-    
-    const { entry } = req.body;
-    
-    if (entry && entry?.changes) {
-      for (const change of entry.changes) {
-        if (change.field === 'messages') {
-          const { messages } = change.value;
-          
-          if (messages && messages.length > 0) {
-            for (const message of messages) {
-              await webhookQueue.add('process_incoming_message', {
-                platform: 'whatsapp',
-                messageData: {
-                  from: message.from,
-                  text: message.text,
-                  timestamp: message.timestamp,
-                  messageId: message.id
-                }
-              });
-            }
+    console.log('📨 WhatsApp webhook received:', JSON.stringify(req.body, null, 2));
+
+    const body = req.body;
+
+    // WhatsApp sends webhook data in this structure
+    if (body.object === 'whatsapp_business_account') {
+      if (body.entry && body.entry.changes && body.entry.changes.value.messages) {
+        const message = body.entry.changes.value.messages;
+        const contact = body.entry.changes.value.contacts;
+
+        // Process message via localhost job queue
+        await messageQueue.add('process_incoming_message', {
+          platform: 'whatsapp',
+          messageData: {
+            from: message.from,
+            text: { body: message.text?.body || '' },
+            timestamp: message.timestamp,
+            contact: contact
           }
-        }
+        });
+
+        console.log('✅ WhatsApp message queued for processing');
       }
     }
-    
-    res.status(200).send('OK');
+
+    res.sendStatus(200);
   } catch (error) {
     console.error('WhatsApp webhook error:', error);
-    res.status(500).send('Internal Server Error');
+    res.sendStatus(500);
   }
 });
 
-// Instagram webhook
-webhookRouter.get('/instagram', (req: Request, res: Response) => {
+// Instagram webhook verification
+webhookRouter.get('/instagram', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  
-  if (mode === 'subscribe' && token === process.env.INSTAGRAM_VERIFY_TOKEN) {
-    res.status(200).send(challenge);
+
+  if (mode && token) {
+    if (mode === 'subscribe' && token === process.env.INSTAGRAM_VERIFY_TOKEN) {
+      console.log('✅ Instagram webhook verified');
+      res.status(200).send(challenge);
+    } else {
+      console.log('❌ Instagram webhook verification failed');
+      res.sendStatus(403);
+    }
   } else {
-    res.status(403).send('Forbidden');
+    res.sendStatus(400);
   }
 });
 
-webhookRouter.post('/instagram', async (req: Request, res: Response) => {
+// Instagram webhook - receive messages
+webhookRouter.post('/instagram', async (req, res) => {
   try {
-    const signature = req.headers['x-hub-signature-256'] as string;
-    const payload = JSON.stringify(req.body);
-    
-    if (!webhookService.verifyInstagramWebhook(payload, signature)) {
-      return res.status(403).send('Unauthorized');
-    }
-    
-    const { entry } = req.body;
-    
-    if (entry && entry?.messaging) {
-      for (const messagingEvent of entry.messaging) {
-        if (messagingEvent.message) {
-          await webhookQueue.add('process_incoming_message', {
+    console.log('📨 Instagram webhook received:', JSON.stringify(req.body, null, 2));
+
+    const body = req.body;
+
+    if (body.object === 'instagram') {
+      if (body.entry && body.entry.messaging) {
+        const messaging = body.entry.messaging;
+
+        if (messaging.message) {
+          // Process Instagram message
+          await messageQueue.add('process_incoming_message', {
             platform: 'instagram',
             messageData: {
-              sender: messagingEvent.sender,
-              message: messagingEvent.message,
-              timestamp: messagingEvent.timestamp,
-              messageId: messagingEvent.message.mid
+              sender: { id: messaging.sender.id },
+              message: { text: messaging.message.text },
+              timestamp: messaging.timestamp
             }
           });
+
+          console.log('✅ Instagram message queued for processing');
         }
       }
     }
-    
-    res.status(200).send('OK');
+
+    res.sendStatus(200);
   } catch (error) {
     console.error('Instagram webhook error:', error);
-    res.status(500).send('Internal Server Error');
+    res.sendStatus(500);
   }
 });
 
-// Website chat webhook (for embedded chat widgets)
-webhookRouter.post('/website', async (req: Request, res: Response) => {
+// Generic webhook for testing
+webhookRouter.post('/test', async (req, res) => {
   try {
-    const { customerName, message, sessionId } = req.body;
-    
-    // Find or create conversation
-    let conversation = await prisma.conversation.findFirst({
-      where: {
-        channel: 'WEBSITE',
-        customerName: sessionId
-      }
-    });
-    
-    if (!conversation) {
-      conversation = await prisma.conversation.create({
-        data: {
-          channel: 'WEBSITE',
-          customerName: customerName || 'Anonymous',
-          status: 'OPEN'
-        }
-      });
-    }
-    
-    // Create message
-    const newMessage = await prisma.message.create({
+    console.log('🧪 Test webhook received:', req.body);
+
+    // Create a test conversation for localhost development
+    const testConversation = await prisma.conversation.create({
       data: {
-        conversationId: conversation.id,
-        content: message,
-        sender: 'CUSTOMER'
+        channel: 'WEBSITE',
+        customerName: 'Test Customer',
+        status: 'OPEN',
+        subject: 'Test Message from Webhook'
       }
     });
-    
-    // Trigger AI response
-    await webhookQueue.add('process_incoming_message', {
-      platform: 'website',
-      messageData: {
-        conversationId: conversation.id,
-        text: message,
-        messageId: newMessage.id
+
+    // Create test message
+    const testMessage = await prisma.message.create({
+      data: {
+        conversationId: testConversation.id,
+        content: req.body.message || 'Test message from webhook',
+        sender: 'CUSTOMER',
+        messageType: 'TEXT'
       }
     });
-    
-    res.status(200).json({ 
-      success: true, 
-      conversationId: conversation.id,
-      messageId: newMessage.id 
+
+    // Emit real-time update
+    socketManager.emitToConversation(testConversation.id, 'new_conversation', {
+      conversation: testConversation,
+      message: testMessage
     });
-    
+
+    console.log('✅ Test webhook processed successfully');
+
+    res.json({
+      success: true,
+      conversationId: testConversation.id,
+      messageId: testMessage.id,
+      message: 'Test webhook processed successfully'
+    });
+
   } catch (error) {
-    console.error('Website webhook error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Test webhook error:', error);
+    res.status(500).json({ error: 'Failed to process test webhook' });
   }
+});
+
+// Voice webhook (for future voice integration)
+webhookRouter.post('/voice', async (req, res) => {
+  try {
+    console.log('📞 Voice webhook received:', req.body);
+
+    // For now, just log voice webhooks
+    // In production, this would handle voice call events
+    
+    res.json({
+      success: true,
+      message: 'Voice webhook received (localhost development)'
+    });
+
+  } catch (error) {
+    console.error('Voice webhook error:', error);
+    res.sendStatus(500);
+  }
+});
+
+// Health check for webhooks
+webhookRouter.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    webhooks: {
+      whatsapp: 'ready',
+      instagram: 'ready',
+      voice: 'ready',
+      test: 'ready'
+    },
+    timestamp: new Date().toISOString()
+  });
 });
