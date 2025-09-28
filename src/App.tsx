@@ -14,48 +14,64 @@ import Pricing from "./pages/Pricing";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 
-
-
-
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-  <BrowserRouter>
-    <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <div className="min-h-screen bg-background">
-          <Navigation />
+    <TooltipProvider>
+      <Toaster />
+      <Sonner />
+      <BrowserRouter>
+        <AuthProvider>
           <Routes>
-              <Route path="/" element={<Index />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/dashboard" element={
+            <Route path="/" element={<Index />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/pricing" element={<Pricing />} />
+            <Route 
+              path="/dashboard" 
+              element={
                 <ProtectedRoute>
-                  <Dashboard />
+                  <div className="flex h-screen">
+                    <Navigation />
+                    <main className="flex-1 overflow-auto">
+                      <Dashboard />
+                    </main>
+                  </div>
                 </ProtectedRoute>
-              } />
-              <Route path="/conversations" element={
+              } 
+            />
+            <Route 
+              path="/conversations" 
+              element={
                 <ProtectedRoute>
-                  <Conversations />
+                  <div className="flex h-screen">
+                    <Navigation />
+                    <main className="flex-1 overflow-auto">
+                      <Conversations />
+                    </main>
+                  </div>
                 </ProtectedRoute>
-              } />
-              <Route path="/pricing" element={<Pricing />} />
-              <Route path="/settings" element={
+              } 
+            />
+            <Route 
+              path="/settings" 
+              element={
                 <ProtectedRoute>
-                  <Settings />
+                  <div className="flex h-screen">
+                    <Navigation />
+                    <main className="flex-1 overflow-auto">
+                      <Settings />
+                    </main>
+                  </div>
                 </ProtectedRoute>
-              } />
-              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-        </div>
-      </TooltipProvider>
-    </AuthProvider>
-  </BrowserRouter>
-</QueryClientProvider>
-
+              } 
+            />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </TooltipProvider>
+  </QueryClientProvider>
 );
 
 export default App;

@@ -17,7 +17,7 @@ export class ApiError extends Error {
   }
 }
 
-// Enhanced API client
+// Enhanced API client with all backend endpoints
 export const api = {
   async request(endpoint: string, options: RequestInit = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
@@ -44,7 +44,11 @@ export const api = {
         );
       }
 
-      return await response.json();
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        return await response.json();
+      }
+      return response.text();
     } catch (error) {
       if (error instanceof ApiError) {
         throw error;
@@ -90,21 +94,90 @@ export const api = {
     }
   },
 
-  // Conversation methods
+  // Enhanced conversation methods
   conversations: {
-    async getAll() {
-      return api.request('/conversations');
+    async getAll(page = 1, limit = 50) {
+      return api.request(`/conversations?page=${page}&limit=${limit}`);
     },
 
     async getById(id: string) {
       return api.request(`/conversations/${id}`);
     },
 
-    async createMessage(conversationId: string, content: string, sender: 'CUSTOMER' | 'AI' | 'HUMAN' = 'CUSTOMER') {
+    async createMessage(conversationId: string, content: string, sender: 'CUSTOMER' | 'AI' | 'HUMAN' = 'HUMAN') {
       return api.request(`/conversations/${conversationId}/messages`, {
         method: 'POST',
         body: JSON.stringify({ content, sender }),
       });
+    },
+
+    async updateStatus(conversationId: string, status: 'OPEN' | 'HUMAN' | 'RESOLVED') {
+      return api.request(`/conversations/${conversationId}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({ status }),
+      });
+    },
+
+    async getByChannel(channel: 'WHATSAPP' | 'INSTAGRAM' | 'WEBSITE' | 'VOICE_CALL') {
+      return api.request(`/conversations?channel=${channel}`);
+    }
+  },
+
+  // Voice agent methods
+  voice: {
+    async getCalls(page = 1, limit = 20) {
+      return api.request(`/voice/calls?page=${page}&limit=${limit}`);
+    },
+
+    async getActiveCalls() {
+      return api.request('/voice/calls/active');
+    },
+
+    async initiateCall(phoneNumber: string, customerName?: string) {
+      return api.request('/voice/calls/initiate', {
+        method: 'POST',
+        body: JSON.stringify({ phoneNumber, customerName })
+      });
+    },
+
+    async transferCall(callId: string, agentId?: string) {
+      return api.request('/voice/calls/transfer', {
+        method: 'POST',
+        body: JSON.stringify({ callId, agentId })
+      });
+    },
+
+    async getAnalytics(period = '7d') {
+      return api.request(`/voice/analytics?period=${period}`);
+    }
+  },
+
+  // AI methods
+  ai: {
+    async generateResponse(conversationId: string, message: string) {
+      return api.request('/ai/generate-response', {
+        method: 'POST',
+        body: JSON.stringify({ conversationId, message })
+      });
+    },
+
+    async getSummary(conversationId: string) {
+      return api.request(`/ai/summary/${conversationId}`);
+    },
+
+    async shouldEscalate(conversationId: string, message: string) {
+      return api.request(`/ai/should-escalate/${conversationId}?message=${encodeURIComponent(message)}`);
+    }
+  },
+
+  // Analytics methods
+  analytics: {
+    async getDashboard() {
+      return api.request('/analytics/dashboard');
+    },
+
+    async getTimeseries(period = '7d', metric = 'conversations') {
+      return api.request(`/analytics/timeseries?period=${period}&metric=${metric}`);
     }
   },
 
@@ -114,10 +187,53 @@ export const api = {
       return api.request('/settings/me');
     },
 
-    async updateSettings(settings: { aiEnabled?: boolean; notifications?: boolean; dataRetentionDays?: number }) {
+    async updateSettings(settings: {
+      aiEnabled?: boolean;
+      notifications?: boolean;
+      dataRetentionDays?: number;
+      businessName?: string;
+      contactEmail?: string;
+      phoneNumber?: string;
+      websiteUrl?: string;
+    }) {
       return api.request('/settings/settings', {
         method: 'PUT',
         body: JSON.stringify(settings),
+      });
+    },
+
+    async getIntegrations() {
+      return api.request('/settings/integrations');
+    },
+
+    async createIntegration(provider: string, accessToken: string, config?: any) {
+      return api.request('/settings/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ provider, accessToken, config })
+      });
+    },
+
+    async deleteIntegration(id: string) {
+      return api.request(`/settings/integrations/${id}`, {
+        method: 'DELETE'
+      });
+    }
+  },
+
+  // Admin methods (if user has admin role)
+  admin: {
+    async getUsers(page = 1, limit = 20, search = '') {
+      return api.request(`/admin/users?page=${page}&limit=${limit}&search=${search}`);
+    },
+
+    async getStats() {
+      return api.request('/admin/stats');
+    },
+
+    async updateUserRole(userId: string, role: 'USER' | 'ADMIN') {
+      return api.request(`/admin/users/${userId}/role`, {
+        method: 'PUT',
+        body: JSON.stringify({ role })
       });
     }
   }

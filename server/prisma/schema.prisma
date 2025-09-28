@@ -8,30 +8,44 @@ datasource db {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email         String         @unique
-  passwordHash  String
-  name          String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  role          UserRole       @default(USER)
-  conversations Conversation[]
-  integrations  Integration[]
-  settings      Setting?
-  subscription  Subscription?
+  id               String             @id @default(cuid())
+  email            String             @unique
+  passwordHash     String
+  name             String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  role             UserRole           @default(USER)
+  conversations    Conversation[]
+  integrations     Integration[]
+  settings         Setting?
+  subscription     Subscription?
+  voiceAnalytics   VoiceAnalytics[]   // NEW: Voice analytics
 }
 
 model Conversation {
-  id           String     @id @default(cuid())
-  subject      String?
-  channel      Channel    @default(WEBSITE)
-  status       ConvStatus @default(OPEN)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  customerName String?
-  userId       String?
-  user         User?      @relation(fields: [userId], references: [id])
-  messages     Message[]
+  id                String      @id @default(cuid())
+  subject           String?
+  channel           Channel     @default(WEBSITE)
+  status            ConvStatus  @default(OPEN)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  customerName      String?
+  customerPhone     String?     // NEW: For voice calls
+  callDuration      Int?        // NEW: Call duration in seconds
+  recordingUrl      String?     // NEW: Call recording URL
+  transcriptionUrl  String?     // NEW: Transcription file URL
+  userId            String?
+  user              User?       @relation(fields: [userId], references: [id])
+  messages          Message[]
+  callLogs          CallLog[]   // NEW: Voice call logs
+
+  // Enhanced indexes
+  @@index([userId])
+  @@index([status])
+  @@index([channel])
+  @@index([customerPhone]) // NEW
+  @@index([createdAt])
+  @@index([updatedAt])
 }
 
 model Message {
@@ -39,23 +53,37 @@ model Message {
   conversationId String
   sender         Sender
   content        String
+  messageType    MessageType  @default(TEXT)        // NEW: Message type
+  audioUrl       String?                           // NEW: Audio message URL
+  audioDuration  Int?                              // NEW: Audio duration
+  transcription  String?                           // NEW: Audio transcription
+  confidence     Float?                            // NEW: Transcription confidence
   createdAt      DateTime     @default(now())
   conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  // Enhanced indexes
+  @@index([conversationId])
+  @@index([conversationId, createdAt])
+  @@index([messageType]) // NEW
+  @@index([sender])
+  @@index([createdAt])
 }
 
 model Setting {
-  id                Int   @id @default(cuid())
+  id                String   @id @default(cuid())  // FIXED: Changed from Int to String
   userId            String   @unique
   aiEnabled         Boolean  @default(true)
   notifications     Boolean  @default(true)
   dataRetentionDays Int      @default(90)
-  createdAt         DateTime @default(now())  
-  updatedAt         DateTime @updatedAt
-  businessName      String?
+  businessName      String?                        // These fields exist in your schema
   contactEmail      String?
   phoneNumber       String?
   websiteUrl        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
   user              User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
 }
 
 model Integration {
@@ -65,6 +93,9 @@ model Integration {
   status     String   @default("connected")
   lastSyncAt DateTime @default(now())
   user       User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([provider])
 }
 
 model Subscription {
@@ -77,8 +108,58 @@ model Subscription {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
 }
 
+// NEW: Voice call logging and analytics
+model CallLog {
+  id                    String        @id @default(cuid())
+  conversationId        String
+  callId                String        @unique
+  direction             CallDirection
+  phoneNumber           String
+  startTime             DateTime
+  endTime               DateTime?
+  duration              Int?          // in seconds
+  status                CallStatus
+  recordingUrl          String?
+  transcriptionUrl      String?
+  aiResponseCount       Int           @default(0)
+  escalatedToHuman      Boolean       @default(false)
+  customerSatisfaction  Int?          // 1-5 rating
+  cost                  Decimal?      // call cost in cents
+  conversation          Conversation  @relation(fields: [conversationId], references: [id])
+  createdAt             DateTime      @default(now())
+
+  @@index([conversationId])
+  @@index([phoneNumber])
+  @@index([startTime])
+  @@index([status])
+  @@index([direction])
+  @@index([callId])
+}
+
+// NEW: Voice analytics
+model VoiceAnalytics {
+  id                    String   @id @default(cuid())
+  userId                String
+  date                  DateTime
+  totalCalls            Int      @default(0)
+  totalDuration         Int      @default(0)    // in seconds
+  averageDuration       Float    @default(0)    // in seconds
+  aiResolutionRate      Float    @default(0)    // percentage
+  customerSatisfaction  Float    @default(0)    // average rating
+  costTotal             Decimal  @default(0)    // in cents
+  user                  User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+}
+
+// Enums
 enum UserRole {
   USER
   ADMIN
@@ -88,6 +169,8 @@ enum Channel {
   WHATSAPP
   INSTAGRAM
   WEBSITE
+  VOICE_CALL  // NEW: Voice channel
+  SMS         // NEW: SMS channel
 }
 
 enum ConvStatus {
@@ -100,4 +183,28 @@ enum Sender {
   CUSTOMER
   AI
   HUMAN
+}
+
+// NEW: Message types
+enum MessageType {
+  TEXT
+  AUDIO
+  IMAGE
+  DOCUMENT
+}
+
+// NEW: Call directions
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// NEW: Call status
+enum CallStatus {
+  RINGING
+  ANSWERED
+  BUSY
+  NO_ANSWER
+  FAILED
+  COMPLETED
 }
