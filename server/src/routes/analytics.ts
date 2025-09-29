@@ -124,7 +124,7 @@ analyticsRouter.get('/dashboard', async (req: AuthRequest, res) => {
         customerName: conv.customerName,
         channel: conv.channel,
         status: conv.status,
-        lastMessage: conv.messages?.content?.substring(0, 50) + '...' || 'No messages',
+        lastMessage: conv.messages[0]?.content?.substring(0, 50) + '...' || 'No messages',
         updatedAt: conv.updatedAt
       }))
     });
@@ -173,8 +173,8 @@ analyticsRouter.get('/conversations', async (req: AuthRequest, res) => {
             take: 1,
             orderBy: { createdAt: 'desc' }
           },
-          _count: {
-            messages: true
+          _count: { 
+            select: { messages: true }
           }
         },
         orderBy: { createdAt: 'desc' },

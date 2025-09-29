@@ -15,6 +15,7 @@ import { aiRouter } from './routes/ai.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { settingsRouter } from './routes/settings.js';
 import { adminRouter } from './routes/admin.js';
+import { voiceRouter } from './routes/voice.js';
 
 // Import services (localhost version - no Redis)
 import { socketManager } from './services/socket.js';
@@ -66,6 +67,7 @@ app.use('/api/ai', aiRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/voice', voiceRouter);
 
 // Health check (localhost version)
 app.get('/health', (req, res) => {
